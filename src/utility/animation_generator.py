@@ -1,7 +1,8 @@
 """
 animation functions are found here
 """
-
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ import matplotlib.image as mpimg
 from matplotlib import animation
 
 from src.simulator.config import *
+
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 veh_showing_route_step = 1
@@ -25,11 +27,12 @@ def anim(frames_vehs):
             r1y = []
             for leg in frames_vehs[0][i].route:
                 for step in leg.steps:
-                    geo = np.transpose(step.geo)
+                    geo = np.transpose(step.geo_pair)
                     r1x.extend(geo[0])
                     r1y.extend(geo[1])
             if i % veh_showing_route_step == 0:
                 routes1[i].set_data(r1x, r1y)
+
         return vehs, routes1
 
     def animate(n):
@@ -39,7 +42,7 @@ def anim(frames_vehs):
             r1y = []
             for leg in frames_vehs[n][i].route:
                 for step in leg.steps:
-                    geo = np.transpose(step.geo)
+                    geo = np.transpose(step.geo_pair)
                     r1x.extend(geo[0])
                     r1y.extend(geo[1])
             if i % veh_showing_route_step == 0:
@@ -55,11 +58,12 @@ def anim(frames_vehs):
     vehs = []
     routes1 = []  # veh current route
 
-    veh_color = '#FFFFFF'
-    for v in frames_vehs[0]:
+    colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF']
+    for i,v in enumerate(frames_vehs[0]):
         size = 6
-        vehs.append(plt.plot([], [], color=veh_color, marker='o', markersize=size, alpha=1)[0])
-        routes1.append(plt.plot([], [], linestyle='-', color=veh_color, alpha=0.4)[0])
+        color = colors[i % len(colors)]  # assign a color based on the index
+        vehs.append(plt.plot([], [], color=color, marker='o', markersize=size, alpha=1)[0])
+        routes1.append(plt.plot([], [], linestyle='-', color=color, alpha=0.4)[0])
     anime = animation.FuncAnimation(fig, animate, init_func=init, frames=len(frames_vehs), interval=amin_frame_interval)
     # print('objective', objective, 'num of frames', len(frames_vehs))
     print('saving animation....')

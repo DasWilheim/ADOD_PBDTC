@@ -13,7 +13,7 @@ from src.value_function.replay_buffer import *
 class ValueFunction(object):
     def __init__(self, num_locations: int = 4091):
         self.lr = 0.01                  # learning rate
-        self.gamma = 0.90                # reward discount factor
+        self.gamma = 0.90               # reward discount factor
         self.buffer_size = 1080         # replay buffer size
         self.batch_size_train = 32      # mini-batch size for training
         self.tau = 0.05                 # for soft update of target network parameters

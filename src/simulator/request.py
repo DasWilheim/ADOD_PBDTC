@@ -13,25 +13,34 @@ class Req(object):
         Tr: request time
         onid: nearest origin node id in network
         dnid: nearest destination node id in network
+        prio: priority of the request
         Ts: shortest travel time
         Ds: shortest travel distance
         Clp: constraint - latest pickup
         Cld: constraint - latest dropoff
+        Clpn: constraint - latest pickup non-priority
+        Cldn: constraint - latest dropoff non-priority
         Tp: actually pickup time
         Td: actually dropoff time
         D: detour factor
     """
 
-    def __init__(self, id: int, Tr: int, onid: int, dnid: int):
+    def __init__(self, id: int, Tr: int, onid: int, dnid: int, prio: int):
         self.id = id
         self.status = OrderStatus.PENDING
         self.Tr = Tr
         self.onid = onid
         self.dnid = dnid
+        self.prio = prio
         self.Ts = get_duration_from_origin_to_dest(self.onid, self.dnid)
         self.Ds = get_distance_from_origin_to_dest(self.onid, self.dnid)
-        self.Clp = Tr + MAX_PICKUP_WAIT_TIME_MIN[0] * 60
-        self.Cld = Tr + self.Ts + MAX_PICKUP_WAIT_TIME_MIN[0] * 60 * 2
+        # if self.prio == 1:
+        #     self.Clp = Tr + MAX_PICKUP_WAIT_TIME_MIN[0] * 60
+        #     self.Cld = Tr + self.Ts + MAX_PICKUP_WAIT_TIME_MIN[0] * 60 * 2
+        # # elif self.prio == 3:
+        self.Clp = Tr + MAX_PICKUP_WAIT_TIME_MIN_NON_PRIORITY[0] * 60
+        self.Cld = Tr + self.Ts + MAX_PICKUP_WAIT_TIME_MIN_NON_PRIORITY[0] * 60 * 2
+
         # self.Clp = Tr + min(MAX_PICKUP_WAIT_TIME_MIN[0] * 60, self.Ts * (2 - MAX_ONBOARD_DETOUR))
         # self.Cld = \
         #     Tr + self.Ts + min(MAX_PICKUP_WAIT_TIME_MIN[0] * 60 * 2, self.Clp - Tr + self.Ts * (MAX_ONBOARD_DETOUR - 1))

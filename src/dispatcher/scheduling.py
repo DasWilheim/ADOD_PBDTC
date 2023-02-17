@@ -56,7 +56,6 @@ def insert_req_into_sche(veh_params: [int, float, int], sub_sche: list[(int, int
     sub_sche.insert(idx_p, (rid, 1, r_onid, r_Clp))
     sub_sche.insert(idx_d, (rid, -1, r_dnid, r_Cld))
     flag, c, viol = test_constraints_get_cost(veh_params, sub_sche, rid, idx_p, idx_d, system_time_sec)
-
     if flag:
         new_sche = copy.copy(sub_sche)
         new_sche_cost = c

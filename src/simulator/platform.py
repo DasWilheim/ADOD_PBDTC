@@ -229,8 +229,10 @@ class Platform(object):
         for req in self.reqs:
             if req.status != OrderStatus.PENDING:
                 continue
-            if self.system_time_sec >= req.Tr + 150 or self.system_time_sec >= req.Clp:
+
+            if self.system_time_sec >= req.Clp or self.system_time_sec >= req.Tr + 150:
                 req.status = OrderStatus.WALKAWAY
+
 
         if DEBUG_PRINT:
             noi = 0  # number of idle vehicles at the end of the current epoch
@@ -264,7 +266,8 @@ class Platform(object):
             req_Tr = new_raw_req.request_time_sec - self.req_init_time_sec
             req_onid = new_raw_req.origin_node_id
             req_dnid = new_raw_req.destination_node_id
-            req = Req(req_id, req_Tr, req_onid, req_dnid)
+            req_prio = new_raw_req.priority
+            req = Req(req_id, req_Tr, req_onid, req_dnid, req_prio)
             current_request_count += 1
             new_raw_req_idx = self.req_init_idx + int(current_request_count / REQUEST_DENSITY)
             new_received_rids.append(len(self.reqs))
@@ -338,6 +341,8 @@ class Platform(object):
               f"{int(WINDDOWN_DURATION_MIN * 60 / CYCLE_S[0])} = {num_of_epochs} epochs).")
         print(f"  - Order Config: density = {REQUEST_DENSITY} ({self.taxi_data_file}), "
               f"max_wait = {MAX_PICKUP_WAIT_TIME_MIN[0] * 60} s. (Δt = {CYCLE_S[0]} s).")
+        print(f"  - Order Config: density = {REQUEST_DENSITY} ({self.taxi_data_file}), "
+              f"max_wait_non_priority = {MAX_PICKUP_WAIT_TIME_MIN_NON_PRIORITY[0] * 60} s. (Δt = {CYCLE_S[0]} s).")
         print(f"  - Dispatch Config: dispatcher = {DISPATCHER}, rebalancer = {REBALANCER}.")
 
     def report_simulation_result(self, show: bool = True):

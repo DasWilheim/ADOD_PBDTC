@@ -98,5 +98,7 @@ class RawRequest(object):
     def __init__(self):
         self.origin_node_id = 1
         self.destination_node_id = 2
+        self.priority = 3
         self.request_time_sec = 0
         self.request_time_date = "0000-00-00 00:00:00"
+        

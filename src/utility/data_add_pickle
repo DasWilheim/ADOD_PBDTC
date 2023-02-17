@@ -1,0 +1,21 @@
+import pickle
+import os
+import sys
+
+ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(ROOT_PATH)
+SIMULATION_DAYs = ["26", "25"]
+for day in SIMULATION_DAYs:
+
+
+    # Load the RawRequest objects from the pickle file
+    with open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-201605{day}-peak.pickle', "rb") as f:
+        reqs_data = pickle.load(f)
+
+    # Add the priority attribute to each RawRequest object
+    for req in reqs_data:
+        req.priority = 3
+
+    # Save the updated RawRequest objects back to the pickle file
+    with open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-201605{day}-peak.pickle', "wb") as f:
+        pickle.dump(reqs_data, f)

@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 
 # start time of initialization
 from src.utility.utility_functions import *
@@ -11,7 +12,7 @@ from src.value_function.value_function import ValueFunction
 def run_sim(net_file_path=None):
     # 1. Initialize the value_func.
     value_func = ValueFunction()
-    value_func.load_eval_net_from_pickle_file(net_file_path)
+    #value_func.load_eval_net_from_pickle_file(net_file_path)
     main_sim_results = []
 
     # 2. Run simulations on SIMULATION_DAYs
@@ -49,10 +50,10 @@ def run_sim(net_file_path=None):
 
     # _. Generate, show and save the animation of this simulation. (If RENDER_VIDEO is enabled.)
     #  Note: the following anim function has not been updated in a while, so debugs may need to get it run.
-    # if RENDER_VIDEO:
-    #     print('...Outputing simulation video...')
-    #     anime = anim(frames_system_states)
-    #     # plt.show()
+    if RENDER_VIDEO:
+        print('...Outputing simulation video...')
+        anime = anim(frames_system_states)
+        plt.show()
 
 
 if __name__ == '__main__':

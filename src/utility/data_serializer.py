@@ -42,6 +42,8 @@ def load_request_data_from_csv_file_and_save_it_to_pickle_file(path_to_csv: str)
         request.origin_node_id = int(requests_csv.iloc[idx]["onid"])
         request.destination_node_id = int(requests_csv.iloc[idx]["dnid"])
         request.request_time_date = requests_csv.iloc[idx]["ptime"]
+        request.priority = int(requests_csv.iloc[idx]["prio"])
+        # request.request_time_date = requests_csv.iloc[idx]["ptime"]
         request.request_time_sec = compute_the_accumulated_seconds_from_0_clock(request.request_time_date)
         all_requests.append(request)
     path_to_pickle = path_to_csv.replace(".csv", ".pickle")
@@ -66,5 +68,7 @@ if __name__ == '__main__':
     #     taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/manhattan-taxi-201605{day}-peak.csv"
     #     load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
 
-    taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/manhattan-taxi-20160406.csv"
+    taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-20160525-peak.csv"
+    load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
+    taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-20160526-peak.csv"
     load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
