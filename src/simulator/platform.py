@@ -1,15 +1,19 @@
 """
 main structure for the AMoD simulator
 """
+import csv
+import pandas as pd
 
 from src.simulator.request import Req
 from src.simulator.vehicle import Veh
 from src.simulator.route_functions import *
 
+
 from src.dispatcher.dispatch_sba import assign_orders_through_sba
 from src.dispatcher.dispatch_osp import assign_orders_through_osp
 from src.rebalancer.rebalancing_npo import reposition_idle_vehicles_to_nearest_pending_orders
 from src.value_function.value_function import ValueFunction
+from src.simulator.moving_average import MovingAverage
 
 
 class Platform(object):
@@ -23,12 +27,14 @@ class Platform(object):
         req_init_idx: init index to read reqs_data
         dispatcher: the algorithm used to do the dispatching
         rebalancer: the algorithm used to do the rebalancing
+        priorityplane: the algorithm used to do the priorit control
 
     """
 
     def __init__(self, taxi_data_file: str,
                  value_func: ValueFunction,
-                 simulation_start_time_stamp: datetime):
+                 simulation_start_time_stamp: datetime,
+                 window_size: int):
         t = timer_start()
         self.taxi_data_file = taxi_data_file
         self.value_func = value_func
@@ -48,11 +54,15 @@ class Platform(object):
         # Initialize the fleet.
         self.vehs = []
         num_of_stations = get_num_of_vehicle_stations()
-        for i in range(FLEET_SIZE[0]):
-            station_idx = int(i * num_of_stations / FLEET_SIZE[0])
-            nid = get_vehicle_station_id(station_idx)
-            [lng, lat] = get_node_geo(nid)
-            self.vehs.append(Veh(i, nid, lng, lat, VEH_CAPACITY[0], self.system_time_sec))
+        last_assigned_index = -1 
+        for i, veh_capacity in enumerate(VEH_CAPACITY):
+            for j in range(FLEET_SIZE[i]):
+                station_idx = int(j * num_of_stations / FLEET_SIZE[i])
+                nid = get_vehicle_station_id(station_idx)
+                veh_acceptance = get_vehicle_acceptance()
+                [lng, lat] = get_node_geo(nid)
+                self.vehs.append(Veh(last_assigned_index + j, nid, lng, lat, veh_capacity, veh_acceptance, self.system_time_sec))
+            last_assigned_index += FLEET_SIZE[i]
 
         # Initialize the demand generator.
         self.reqs = []
@@ -80,6 +90,23 @@ class Platform(object):
             self.rebalancer = RebalancerMethod.NPO
         else:
             assert (False and "[ERROR] WRONG REBALANCER SETTING! Please check the name of rebalancer in config!")
+
+        # Initialize the priority plane.  This is fitted in ... AMoD\src\data_functions\fittingplane.py
+        if PRIORITY_CONTROL:    
+            with open(f'{PATH_TO_PLANE_DATA}fitted_plane.pickle', 'rb') as f:
+                plane_data = pickle.load(f)
+
+            self.model = plane_data['model']
+            self.poly = plane_data['poly']
+            self.X = plane_data['X']
+            self.Y = plane_data['Y']
+            self.z_pred = plane_data['z_pred']
+            self.x = plane_data['x']
+            self.y = plane_data['y']
+
+
+        # Initialize the moving average.
+        self.moving_average = MovingAverage(window_size)
 
         # System report about running time.
         self.time_of_init = get_runtime_sec_from_t_to_now(simulation_start_time_stamp)
@@ -117,6 +144,7 @@ class Platform(object):
         self.end_time_stamp = get_time_stamp_datetime()
         return frames_system_states
 
+
     # dispatch the AMoD system: move vehicles, generate requests, assign and rebalance
     def run_cycle(self, epoch_start_time_sec):
         t = timer_start()
@@ -144,28 +172,34 @@ class Platform(object):
         # 2. Generate new reqs.
         new_received_rids = self.gen_reqs_to_time()
 
-        # 3. Assign pending orders to vehicles.
+        # 3 Calculate the packge type distribution
+        if PRIORITY_CONTROL:
+            priority_ratio = self.set_priority_ratio(new_received_rids)
+        else:
+            priority_ratio = PRIORITY_RATIO
+
+        # 4. Assign pending orders to vehicles.
         for veh in self.vehs:
             veh.sche_has_been_updated_at_current_epoch = False
         if verify_the_current_epoch_is_in_the_main_study_horizon(epoch_end_time_sec):
             if self.dispatcher == DispatcherMethod.SBA:
                 assign_orders_through_sba(new_received_rids, self.reqs, self.vehs, self.system_time_sec,
-                                          self.value_func)
+                                          self.value_func, priority_ratio)
             elif self.dispatcher == DispatcherMethod.OSP_NR:
                 assign_orders_through_osp(new_received_rids, self.reqs, self.vehs, self.system_time_sec,
-                                          self.value_func, is_reoptimization=False)
+                                          self.value_func, priority_ratio)
             elif self.dispatcher == DispatcherMethod.OSP:
                 assign_orders_through_osp(new_received_rids, self.reqs, self.vehs, self.system_time_sec,
-                                          self.value_func)
+                                          self.value_func, priority_ratio)
         else:
-            assign_orders_through_sba(new_received_rids, self.reqs, self.vehs, self.system_time_sec, self.value_func)
+            assign_orders_through_sba(new_received_rids, self.reqs, self.vehs, self.system_time_sec, self.value_func, priority_ratio)
 
-        # 4. Reposition idle vehicles to high demand areas.
+        # 5. Reposition idle vehicles to high demand areas.
         if self.rebalancer == RebalancerMethod.NPO:
             reposition_idle_vehicles_to_nearest_pending_orders(self.reqs, self.vehs, self.system_time_sec,
                                                                len(new_received_rids), self.value_func)
 
-        # 5. Check the statuses of orders, to make sure that no one is assigned to multiple vehicles.
+        # 6. Check the statuses of orders, to make sure that no one is assigned to multiple vehicles.
         if DEBUG_PRINT:
             num_of_total_orders = len(self.reqs)
             num_of_completed_orders = num_of_onboard_orders = num_of_picking_orders \
@@ -230,8 +264,22 @@ class Platform(object):
             if req.status != OrderStatus.PENDING:
                 continue
 
-            if self.system_time_sec >= req.Clp or self.system_time_sec >= req.Tr + 150:
+            # give a package more heat when it is closing in to the deadline
+            if HEAT: 
+                heat = ((self.system_time_sec - req.Tr)/(req.Clp - req.Tr) + 1) 
+                req.heat = heat
+
+            if self.system_time_sec >= req.Clp: # or self.system_time_sec >= req.Tr + 150:
                 req.status = OrderStatus.WALKAWAY
+
+            # # Without a deadline
+            # if self.system_time_sec >= req.Clp or self.system_time_sec >= req.Tr + 150:
+            #     if req.prio == 2 or req.prio == 1:
+            #         req.Clp = req.Clp + 10
+            #         req.Cld = req.Cld + 10
+            #         continue
+            #     req.status = OrderStatus.WALKAWAY
+
 
 
         if DEBUG_PRINT:
@@ -280,8 +328,73 @@ class Platform(object):
             print(f"            +Orders new received: {len(new_received_rids)} ({timer_end(t)})")
             print(f"        T = {self.system_time_sec}s: Dispatcher is running.")
         return new_received_rids
+    
+    def set_priority_ratio(self, new_received_rids: list[int]):
 
-    def create_report(self, show: bool = True):
+        # Calculate the percentage of both types of packages
+        percentage, all_unserved_rids = self.calculate_package_type_distribution(new_received_rids)
+
+        # Get moving average of the percentage
+        self.moving_average.add(percentage)
+        current_average = self.moving_average.get_average()
+
+
+        x_value = current_average 
+        desired_height = DESIRED_DELIVERY_TIME_TYPE_1
+        y = self.y
+        poly = self.poly
+        model = self.model
+        z_pred = self.z_pred
+
+        y_values = np.linspace(min(y), max(y), 1000)
+
+        # Compute the polynomial features for the given x-value and possible y-values
+        x_grid, y_grid = np.meshgrid(np.array([x_value]), y_values)
+        xy_grid = np.vstack((x_grid.flatten(), y_grid.flatten())).T
+        xy_poly = poly.transform(xy_grid)
+
+        # Predict the Z values using the fitted model
+        z_pred = model.predict(xy_poly)
+
+        # Find the y-value for which the predicted Z is closest to the desired height
+        index = np.argmin(np.abs(z_pred - desired_height))
+        priority_ratio = y_values[index]    
+
+        # print("Current moving average:", current_average)
+        # print("Current priority_ratio:", priority_ratio)
+
+        # Update the deadline, accourding to the priority ratio, for all requests that are unserved and have a priority of 2
+        if PRIORITY_CONTROL:
+            for req in self.reqs:
+                if req.id in all_unserved_rids and req.prio == 2 and req.updated == False:
+
+                    req.Clp = (req.Clp - req.Tr) * priority_ratio + req.Tr
+                    req.Cld = (req.Cld - req.Tr - req.Ts) * priority_ratio + req.Tr + req.Ts
+                    req.updated = True
+
+        return priority_ratio
+
+
+    def calculate_package_type_distribution(self, considered_rids: list[int]):
+        # Calculate the distribution of package types.
+        local_rids = considered_rids.copy()
+
+        # Filter the requests that have a status of PICKING or PENDING
+        local_rids = [req.id for req in self.reqs if req.status in [OrderStatus.PICKING, OrderStatus.PENDING]]
+
+        # Combine local_rids and considered_rids into a single list of ids
+        all_rids =  considered_rids
+
+        # Count the number of requests with priority 1 and 2
+        prio1 = sum(1 for req in self.reqs if req.id in all_rids and req.prio == 1)
+        prio2 = sum(1 for req in self.reqs if req.id in all_rids and req.prio == 2)
+
+        # Calculate the percentage of requests with priority 1
+        percentage_prio1 = prio1 / (prio1 + prio2)
+        return percentage_prio1, all_rids
+
+
+    def create_report(self, idx, show: bool = True, store: bool = True):
         # 1. Get the width of the current console window.
         window_width = shutil.get_terminal_size().columns
         if window_width == 0 or window_width > 90:
@@ -299,9 +412,12 @@ class Platform(object):
             return
 
         # 3. Report the simulation result / performance.
-        self.report_simulation_result(show)
+        self.report_simulation_result(idx, show)
         if show:
             print(dividing_line)
+
+        # 4. store the simulation result / performance.
+        self.store_simulation_results(idx, store)
 
     def report_simulation_config(self):
         # Get the real world time when the simulation starts and ends.
@@ -336,67 +452,103 @@ class Platform(object):
         print("# System Configurations")
         print(f"  - From {sim_start_time_date[11:]} to {sim_end_time_date[11:]}. "
               f"(main simulation between {main_sim_start_date[11:]} and {main_sim_end_date[11:]}).")
-        print(f"  - Fleet Config: size = {FLEET_SIZE[0]}, capacity = {VEH_CAPACITY[0]}. "
-              f"({int(WARMUP_DURATION_MIN * 60 / CYCLE_S[0])} + {num_of_main_epochs} + "
-              f"{int(WINDDOWN_DURATION_MIN * 60 / CYCLE_S[0])} = {num_of_epochs} epochs).")
+        print(f"  - Total Fleet Config: size = {sum(FLEET_SIZE)} ")
+        for i in range(len(FLEET_SIZE)):
+            print(f"      - {FLEET_SIZE[i]} Vehicles with capacity = {VEH_CAPACITY[i]}. ")
         print(f"  - Order Config: density = {REQUEST_DENSITY} ({self.taxi_data_file}), "
-              f"max_wait = {MAX_PICKUP_WAIT_TIME_MIN[0] * 60} s. (Δt = {CYCLE_S[0]} s).")
-        print(f"  - Order Config: density = {REQUEST_DENSITY} ({self.taxi_data_file}), "
-              f"max_wait_non_priority = {MAX_PICKUP_WAIT_TIME_MIN_NON_PRIORITY[0] * 60} s. (Δt = {CYCLE_S[0]} s).")
+              f"max_wait (for non_prioitry packages this could be different) = {MAX_PICKUP_WAIT_TIME_MIN[0] * 60} s. (Δt = {CYCLE_S[0]} s).")
         print(f"  - Dispatch Config: dispatcher = {DISPATCHER}, rebalancer = {REBALANCER}.")
 
-    def report_simulation_result(self, show: bool = True):
+    def store_simulation_results(self, idx, store: bool = True):
+        if not store:
+            return
         # 1. Report order status.
-        req_count = 0
-        walkaway_req_count = 0
-        complete_req_count = 0
-        onboard_req_count = 0
-        picking_req_count = 0
-        pending_req_count = 0
-        total_wait_time_sec = 0
-        total_delay_time_sec = 0
-        total_req_time_sec = 0
-
+        req_count1 = 0
+        walkaway_req_count1 = 0
+        complete_req_count1 = 0
+        onboard_req_count1 = 0
+        picking_req_count1 = 0
+        pending_req_count1 = 0
+        total_wait_time_sec1 = 0
+        total_delay_time_sec1 = 0
+        total_req_time_sec1 = 0
+        req_count2 = 0
+        walkaway_req_count2 = 0
+        complete_req_count2 = 0
+        onboard_req_count2 = 0
+        picking_req_count2 = 0
+        pending_req_count2 = 0
+        total_wait_time_sec2 = 0
+        total_delay_time_sec2 = 0
+        total_req_time_sec2 = 0
+        
         for req in self.reqs:
             if req.Tr <= self.main_sim_start_time_sec:
                 continue
             if req.Tr > self.main_sim_end_time_sec:
                 break
-            req_count += 1
-            if req.status == OrderStatus.WALKAWAY:
-                walkaway_req_count += 1
-            elif req.status == OrderStatus.COMPLETE:
-                complete_req_count += 1
-                total_wait_time_sec += req.Tp - req.Tr
-                total_delay_time_sec += req.Td - (req.Tr + req.Ts)
-                total_req_time_sec += req.Ts
-            elif req.status == OrderStatus.ONBOARD:
-                onboard_req_count += 1
-            elif req.status == OrderStatus.PICKING:
-                picking_req_count += 1
-            elif req.status == OrderStatus.PENDING:
-                pending_req_count += 1
+            if req.prio == 1:
+                req_count1 += 1
+                if req.status == OrderStatus.WALKAWAY:
+                    walkaway_req_count1 += 1
+                elif req.status == OrderStatus.COMPLETE:
+                    complete_req_count1 += 1
+                    total_wait_time_sec1 += req.Tp - req.Tr
+                    total_delay_time_sec1 += req.Td - (req.Tr + req.Ts)
+                    total_req_time_sec1 += req.Ts
+                elif req.status == OrderStatus.ONBOARD:
+                    onboard_req_count1 += 1
+                elif req.status == OrderStatus.PICKING:
+                    picking_req_count1 += 1
+                elif req.status == OrderStatus.PENDING:
+                    pending_req_count1 += 1
+            elif req.prio == 2:
+                req_count2 += 1
+                if req.status == OrderStatus.WALKAWAY:
+                    walkaway_req_count2 += 1
+                elif req.status == OrderStatus.COMPLETE:
+                    complete_req_count2 += 1
+                    total_wait_time_sec2 += req.Tp - req.Tr
+                    total_delay_time_sec2 += req.Td - (req.Tr + req.Ts)
+                    total_req_time_sec2 += req.Ts
+                elif req.status == OrderStatus.ONBOARD:
+                    onboard_req_count2 += 1
+                elif req.status == OrderStatus.PICKING:
+                    picking_req_count2 += 1
+                elif req.status == OrderStatus.PENDING:
+                    pending_req_count2 += 1
 
-        service_req_count = complete_req_count + onboard_req_count
-        self.main_sim_result = [service_req_count, req_count, round(100.0 * service_req_count / req_count, 2)]
-        assert (service_req_count + picking_req_count + pending_req_count == req_count - walkaway_req_count)
-        if not show:
-            return
+        service_req_count1 = complete_req_count1 + onboard_req_count1
+        self.main_sim_result1 = [service_req_count1, req_count1, round(100.0 * service_req_count1 / req_count1, 2)]
+        assert (service_req_count1 + picking_req_count1 + pending_req_count1 == req_count1 - walkaway_req_count1)
+        service_req_count2 = complete_req_count2 + onboard_req_count2
+        self.main_sim_result2 = [service_req_count2, req_count2, round(100.0 * service_req_count2 / req_count2, 2)]
+        assert (service_req_count2 + picking_req_count2 + pending_req_count2 == req_count2 - walkaway_req_count2)
 
-        print(f"# Orders ({req_count - walkaway_req_count}/{req_count})")
-        print(f"  - complete = {complete_req_count} ({100.0 * complete_req_count / req_count:.2f}%), "
-              f"onboard = {onboard_req_count} ({100.0 * onboard_req_count / req_count:.2f}%), "
-              f"total_service = {service_req_count} ({100.0 * service_req_count / req_count:.2f}%).")
-        if picking_req_count + pending_req_count > 0:
-            print(f"  - picking = {picking_req_count} ({100.0 * picking_req_count / req_count:.2f}%), "
-                  f"pending = {pending_req_count} ({100.0 * pending_req_count / req_count:.2f}%).")
-        if complete_req_count > 0:
-            print(f"  - avg_shortest_travel = {total_req_time_sec / complete_req_count:.2f} s, "
-                  f"avg_wait = {total_wait_time_sec / complete_req_count:.2f} s, "
-                  f"avg_delay = {total_delay_time_sec / complete_req_count:.2f} s.")
-        else:
-            print("  [PLEASE USE LONGER SIMULATION DURATION TO BE ABLE TO COMPLETE ORDERS!]")
-
+        priority_ratio = PRIORITY_RATIO
+        first = TAXI_DATA_FILEs[idx][-6:-5]
+        second = TAXI_DATA_FILEs[idx][-5:-4]
+        # package_ratio = TAXI_DATA_FILEs[idx][-3]
+        package_ratio = f"0.{first}{second}"
+        real_package_ratio = req_count1 / req_count2
+        total_orders = req_count1 + req_count2
+        complete_orders = complete_req_count1 + complete_req_count2
+        complete_orders_percentage = 100.0 * (complete_req_count1 + complete_req_count2) / (req_count1 + req_count2)
+        orders_with_priority_1 = req_count1
+        complete_orders_with_priority_1 = complete_req_count1
+        complete_orders_with_priority_1_percentage = 100.0 * (complete_req_count1) / (req_count1)
+        orders_with_priority_2 = req_count2
+        complete_orders_with_priority_2 = complete_req_count2
+        complete_orders_with_priority_2_percentage = 100.0 * (complete_req_count2) / (req_count2)
+        total_wait_time_sec = total_wait_time_sec1 + total_wait_time_sec2
+        total_delay_time_sec = total_delay_time_sec1 + total_delay_time_sec2
+        total_req_time_sec = total_req_time_sec1 + total_req_time_sec2
+        total_time_sec = total_wait_time_sec + total_delay_time_sec + total_req_time_sec
+        Total_time_between_order_and_delivery_prio1 = (((total_req_time_sec1 + total_wait_time_sec1 + total_delay_time_sec1)/ complete_req_count1)/60)
+        Total_time_between_order_and_delivery_prio2 = (((total_req_time_sec2 + total_wait_time_sec2 + total_delay_time_sec2)/ complete_req_count2)/60)
+        print("Total_time_between_order_and_delivery_prio1: !!!!!!!!!!!!!! ", Total_time_between_order_and_delivery_prio1)
+        print("Total_time_between_order_and_delivery_prio2: !!!!!!!!!!!!!! ", Total_time_between_order_and_delivery_prio2)
+        #vehicle analisys
         # 2. Report veh status.
         total_dist_traveled = 0
         total_loaded_dist_traveled = 0
@@ -406,6 +558,8 @@ class Platform(object):
         total_loaded_time_traveled_sec = 0
         total_empty_time_traveled_sec = 0
         total_rebl_time_traveled_sec = 0
+        Total_completed_deliveries = 0
+        Total_completed_deliveries_per_vehicle_capacity = [0 for i in range(len(VEH_CAPACITY))]
 
         for veh in self.vehs:
             total_dist_traveled += veh.Ds
@@ -416,14 +570,192 @@ class Platform(object):
             total_loaded_time_traveled_sec += veh.Lt
             total_empty_time_traveled_sec += veh.Ts_empty
             total_rebl_time_traveled_sec += veh.Tr
+            Total_completed_deliveries += veh.comp
+            for i in range(len(VEH_CAPACITY)):
+                if veh.K == VEH_CAPACITY[i]:
+                    Total_completed_deliveries_per_vehicle_capacity[i] += veh.comp
 
-        avg_dist_traveled_km = total_dist_traveled / 1000.0 / FLEET_SIZE[0]
-        avg_empty_dist_traveled_km = total_empty_dist_traveled / 1000.0 / FLEET_SIZE[0]
-        avg_rebl_dist_traveled_km = total_rebl_dist_traveled / 1000.0 / FLEET_SIZE[0]
-        avg_time_traveled_s = total_time_traveled_sec / FLEET_SIZE[0]
-        avg_empty_time_traveled_s = total_empty_time_traveled_sec / FLEET_SIZE[0]
-        avg_rebl_time_traveled_s = total_rebl_time_traveled_sec / FLEET_SIZE[0]
-        print(f"# Vehicles ({FLEET_SIZE[0]})")
+        avg_dist_traveled_km = total_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_empty_dist_traveled_km = total_empty_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_rebl_dist_traveled_km = total_rebl_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_time_traveled_s = total_time_traveled_sec / sum(FLEET_SIZE)
+        avg_empty_time_traveled_s = total_empty_time_traveled_sec / sum(FLEET_SIZE)
+        avg_rebl_time_traveled_s = total_rebl_time_traveled_sec / sum(FLEET_SIZE)
+        
+        ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+
+        new_row = [priority_ratio, package_ratio, real_package_ratio, total_orders, complete_orders, complete_orders_percentage, orders_with_priority_1, complete_orders_with_priority_1, complete_orders_with_priority_1_percentage, orders_with_priority_2, complete_orders_with_priority_2, complete_orders_with_priority_2_percentage, Total_time_between_order_and_delivery_prio1, Total_time_between_order_and_delivery_prio2, total_wait_time_sec, total_delay_time_sec, total_req_time_sec, total_time_sec, avg_dist_traveled_km, avg_empty_dist_traveled_km, avg_rebl_dist_traveled_km, avg_time_traveled_s, avg_empty_time_traveled_s, avg_rebl_time_traveled_s]
+        with open(f"{ROOT_PATH}/datalog-gitignore/result-data/data_with_travel_time.csv", mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(new_row)
+
+    def report_simulation_result(self, idx, show: bool = True):
+        # 1. Report order status.
+        req_count1 = 0
+        walkaway_req_count1 = 0
+        complete_req_count1 = 0        
+        fast_delivery_count1 = 0
+        onboard_req_count1 = 0
+        picking_req_count1 = 0
+        pending_req_count1 = 0
+        total_wait_time_sec1 = 0
+        total_delay_time_sec1 = 0
+        total_req_time_sec1 = 0
+        req_count2 = 0
+        walkaway_req_count2 = 0
+        complete_req_count2 = 0
+        fast_delivery_count2 = 0
+        onboard_req_count2 = 0
+        picking_req_count2 = 0
+        pending_req_count2 = 0
+        total_wait_time_sec2 = 0
+        total_delay_time_sec2 = 0
+        total_req_time_sec2 = 0
+        
+        for req in self.reqs:
+            if req.Tr <= self.main_sim_start_time_sec:
+                continue
+            if req.Tr > self.main_sim_end_time_sec:
+                break
+            if req.prio == 1:
+                req_count1 += 1
+                if req.status == OrderStatus.WALKAWAY:
+                    walkaway_req_count1 += 1
+                elif req.status == OrderStatus.COMPLETE:
+                    complete_req_count1 += 1
+                    total_wait_time_sec1 += req.Tp - req.Tr
+                    total_delay_time_sec1 += req.Td - (req.Tr + req.Ts)
+                    total_req_time_sec1 += req.Ts
+
+                    # Check if delivery time is under 20 minutes.
+                    if req.Td - req.Tr <= SOFT_DEADLINE_TIME_TYPE_1 * 60:
+                        fast_delivery_count1 += 1
+                    
+                elif req.status == OrderStatus.ONBOARD:
+                    onboard_req_count1 += 1
+                elif req.status == OrderStatus.PICKING:
+                    picking_req_count1 += 1
+                elif req.status == OrderStatus.PENDING:
+                    pending_req_count1 += 1
+            elif req.prio == 2:
+                req_count2 += 1
+                if req.status == OrderStatus.WALKAWAY:
+                    walkaway_req_count2 += 1
+                elif req.status == OrderStatus.COMPLETE:
+                    complete_req_count2 += 1
+                    total_wait_time_sec2 += req.Tp - req.Tr
+                    total_delay_time_sec2 += req.Td - (req.Tr + req.Ts)
+                    total_req_time_sec2 += req.Ts
+
+                    # Check if delivery time is under 20 minutes.
+                    if req.Td - req.Tr <= SOFT_DEADLINE_TIME_TYPE_1 * 60:
+                        fast_delivery_count2 += 1
+
+                elif req.status == OrderStatus.ONBOARD:
+                    onboard_req_count2 += 1
+                elif req.status == OrderStatus.PICKING:
+                    picking_req_count2 += 1
+                elif req.status == OrderStatus.PENDING:
+                    pending_req_count2 += 1
+
+
+
+
+
+
+
+
+
+        service_req_count1 = complete_req_count1 + onboard_req_count1
+        self.main_sim_result1 = [service_req_count1, req_count1, round(100.0 * service_req_count1 / req_count1, 2)]
+        assert (service_req_count1 + picking_req_count1 + pending_req_count1 == req_count1 - walkaway_req_count1)
+        service_req_count2 = complete_req_count2 + onboard_req_count2
+        self.main_sim_result2 = [service_req_count2, req_count2, round(100.0 * service_req_count2 / req_count2, 2)]
+        assert (service_req_count2 + picking_req_count2 + pending_req_count2 == req_count2 - walkaway_req_count2)
+        if not show:
+            return
+
+        print("Priority factor = ", PRIORITY_RATIO, "  pakage ratio = ", TAXI_DATA_FILEs[idx][-6:-4])        
+        print(f"# Total Orders ({req_count1 + req_count2 - walkaway_req_count1 - walkaway_req_count2}/{req_count1 + req_count2})")
+        print(f"  - complete = {complete_req_count1 +complete_req_count2} ({100.0 * (complete_req_count1 + complete_req_count2) / (req_count1 + req_count2):.2f}%), ")
+
+        print(f"# Orders with priority 1 ({req_count1 - walkaway_req_count1}/{req_count1})")
+   
+        print(f"  - complete = {complete_req_count1} ({100.0 * (complete_req_count1) / (req_count1):.2f}%), "
+                f"onboard = {onboard_req_count1} ({100.0 * (onboard_req_count1) / (req_count1):.2f}%), "
+                f"total_service = {service_req_count1} ({100.0 * (service_req_count1) / (req_count1):.2f}%).")
+        if picking_req_count1 + pending_req_count1 > 0:
+            print(f"  - picking = {picking_req_count1} ({100.0 * (picking_req_count1) / (req_count1):.2f}%), "
+                    f"pending = {pending_req_count1} ({100.0 * (pending_req_count1) / (req_count1):.2f}%).")
+        if complete_req_count1 > 0:
+            print(f"  - avg_shortest_travel = {total_req_time_sec1 / complete_req_count1:.2f} s, "
+                    f"avg_wait = {total_wait_time_sec1 / complete_req_count1:.2f} s, "
+                    f"avg_delay = {total_delay_time_sec1 / complete_req_count1:.2f} s.")
+            print(f"  - fast_deliveries = {fast_delivery_count1} ({100.0 * (fast_delivery_count1) / (complete_req_count1):.2f}%)")
+
+        if complete_req_count1> 0:
+            #print the sum of avg wait, delay time and shortest travel time in minutes
+            print(f"  - Total time between order and delivery = {((total_req_time_sec1 + total_wait_time_sec1 + total_delay_time_sec1)/ complete_req_count1)/60:.2f} min ")
+        else:
+            print("  [PLEASE USE LONGER SIMULATION DURATION TO BE ABLE TO COMPLETE ORDERS!]")
+        print(f"# Orders with priority 2 ({req_count2 - walkaway_req_count2}/{req_count2})")
+        print(f"  - complete = {complete_req_count2} ({100.0 * (complete_req_count2) / (req_count2):.2f}%), "
+                f"onboard = {onboard_req_count2} ({100.0 * (onboard_req_count2) / (req_count2):.2f}%), "
+                f"total_service = {service_req_count2} ({100.0 * (service_req_count2) / (req_count2):.2f}%).")
+        if picking_req_count2 + pending_req_count2 > 0:
+            print(f"  - picking = {picking_req_count2} ({100.0 * (picking_req_count2) / (req_count2):.2f}%), "
+                    f"pending = {pending_req_count2} ({100.0 * (pending_req_count2) / (req_count2):.2f}%).")
+        if complete_req_count2 > 0:
+            print(f"  - avg_shortest_travel = {total_req_time_sec2 / complete_req_count2:.2f} s, "
+                    f"avg_wait = {total_wait_time_sec2 / complete_req_count2:.2f} s, "
+                    f"avg_delay = {total_delay_time_sec2 / complete_req_count2:.2f} s.")
+            print(f"  - fast_deliveries = {fast_delivery_count2} ({100.0 * (fast_delivery_count2) / (complete_req_count2):.2f}%)")
+
+        if complete_req_count2> 0:
+            #print the sum of avg wait, delay time and shortest travel time in minutes
+            print(f"  - Total time between order and delivery = {((total_req_time_sec2 + total_wait_time_sec2 + total_delay_time_sec2)/ complete_req_count2)/60:.2f} min ")
+        else:
+            print("  [PLEASE USE LONGER SIMULATION DURATION TO BE ABLE TO COMPLETE ORDERS!]")
+
+
+        # 2. Report veh status.
+        total_dist_traveled = 0
+        total_loaded_dist_traveled = 0
+        total_empty_dist_traveled = 0
+        total_rebl_dist_traveled = 0
+        total_time_traveled_sec = 0
+        total_loaded_time_traveled_sec = 0
+        total_empty_time_traveled_sec = 0
+        total_rebl_time_traveled_sec = 0
+        Total_completed_deliveries = 0
+        Total_completed_deliveries_per_vehicle_capacity = [0 for i in range(len(VEH_CAPACITY))]
+
+        for veh in self.vehs:
+            total_dist_traveled += veh.Ds
+            total_loaded_dist_traveled += veh.Ld
+            total_empty_dist_traveled += veh.Ds_empty
+            total_rebl_dist_traveled += veh.Dr
+            total_time_traveled_sec += veh.Ts
+            total_loaded_time_traveled_sec += veh.Lt
+            total_empty_time_traveled_sec += veh.Ts_empty
+            total_rebl_time_traveled_sec += veh.Tr
+            Total_completed_deliveries += veh.comp
+            for i in range(len(VEH_CAPACITY)):
+                if veh.K == VEH_CAPACITY[i]:
+                    Total_completed_deliveries_per_vehicle_capacity[i] += veh.comp
+
+            
+
+        # print("HHHHHHHIEEEEEEEEEEEEEEERRRRR", Total_completed_deliveries_per_vehicle_capacity)
+
+
+        avg_dist_traveled_km = total_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_empty_dist_traveled_km = total_empty_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_rebl_dist_traveled_km = total_rebl_dist_traveled / 1000.0 / sum(FLEET_SIZE)
+        avg_time_traveled_s = total_time_traveled_sec / sum(FLEET_SIZE)
+        avg_empty_time_traveled_s = total_empty_time_traveled_sec / sum(FLEET_SIZE)
+        avg_rebl_time_traveled_s = total_rebl_time_traveled_sec / sum(FLEET_SIZE)
+        print(f"# Vehicles ({sum(FLEET_SIZE)})")
         print(f"  - Travel Distance: total_dist = {total_dist_traveled / 1000.0:.2f} km, "
               f"avg_dist = {avg_dist_traveled_km:.2f} km.")
         print(f"  - Travel Duration: avg_time = {avg_time_traveled_s:.2f} s "
@@ -437,4 +769,6 @@ class Platform(object):
               f"avg_dist = {avg_rebl_dist_traveled_km:.2f} km "
               f"({100.0 * avg_rebl_dist_traveled_km / avg_dist_traveled_km:.2f}%).")
         print(f"  - Travel Load: average_load_dist = {total_loaded_dist_traveled / total_dist_traveled:.2f}, "
-              f"average_load_time = {total_loaded_time_traveled_sec / total_time_traveled_sec:.2f}.")
+              f"average_load_time = {total_loaded_time_traveled_sec / total_time_traveled_sec:.2f}.")\
+              
+        # print(f"  - Completed = {Total_completed_deliveries} ")

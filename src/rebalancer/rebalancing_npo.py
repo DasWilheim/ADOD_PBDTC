@@ -34,7 +34,7 @@ def reposition_idle_vehicles_to_nearest_pending_orders(reqs: list[Req], vehs: li
             detour_sec = 240  # A hyper parameter and 240 is probably not the best option.
             #  A rebalancing vehicle is allowed to pick up new orders
             #  if it can still visit the reposition waypoint with a small detour.
-            rebl_sche = [(-1, 0, req.onid, system_time_sec + rebl_dt + detour_sec)]
+            rebl_sche = [(-1, 0, req.onid, system_time_sec + rebl_dt + detour_sec, req.prio)]
             rebl_veh_req_pairs.append([veh, [req], rebl_sche, rebl_dt, -rebl_dt])
 
     # # 000. Score the rebalancing task using value functions.

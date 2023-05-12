@@ -5,6 +5,15 @@ import os
 ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.append(ROOT_PATH)
 from src.utility.utility_functions import *
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--test', action='store_true', help='test mode')
+args = parser.parse_args()
+if args.test:
+    files = 'test-'
+else: 
+    files = ''
+
 
 
 def load_network_node_from_csv_file_and_save_it_to_pickle_file(path_to_csv: str):
@@ -43,7 +52,6 @@ def load_request_data_from_csv_file_and_save_it_to_pickle_file(path_to_csv: str)
         request.destination_node_id = int(requests_csv.iloc[idx]["dnid"])
         request.request_time_date = requests_csv.iloc[idx]["ptime"]
         request.priority = int(requests_csv.iloc[idx]["prio"])
-        # request.request_time_date = requests_csv.iloc[idx]["ptime"]
         request.request_time_sec = compute_the_accumulated_seconds_from_0_clock(request.request_time_date)
         all_requests.append(request)
     path_to_pickle = path_to_csv.replace(".csv", ".pickle")
@@ -68,7 +76,17 @@ if __name__ == '__main__':
     #     taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/manhattan-taxi-201605{day}-peak.csv"
     #     load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
 
-    taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-20160525-peak.csv"
-    load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
-    taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-20160526-peak.csv"
-    load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)
+# Multiple days
+days = ['05' , '10', '15', '20', '25', '30', '35', '40', '45', '50', '55', '60', '65', '70', '75', '80', '85', '90', '95']
+prioritys = [ '1.0', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8', '1.9', '2.0', '2.1', '2.2', '2.3', '2.4', '2.5', '2.6', '2.7', '2.8', '2.9', '3.0']
+
+
+# single day
+days = ['1.5']
+prioritys = ['1.0']	
+for day in days:
+    for priority in prioritys:
+        taxi_data = f"{ROOT_PATH}/src/data_functions/data_version_priority2/{files}20160525-flat{day}-{priority}.csv"
+        taxi_data = f"{ROOT_PATH}/datalog-gitignore/taxi-data/aaaa.csv"
+
+        load_request_data_from_csv_file_and_save_it_to_pickle_file(taxi_data)

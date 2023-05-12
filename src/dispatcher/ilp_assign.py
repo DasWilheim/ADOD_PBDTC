@@ -90,7 +90,7 @@ def ilp_assignment(veh_trip_pairs: list[[Veh, list[Req], list[(int, int, int, fl
     except gp.GurobiError as e:
         print(f"\n[GUROBI] Error code = {str(e.message)} ({str(e)}).")
     except AttributeError:
-        print("Encountered an attribute error")
+        print("Encounteredededed an attribute error")
 
     if DEBUG_PRINT:
         print(f"({timer_end(t)})")

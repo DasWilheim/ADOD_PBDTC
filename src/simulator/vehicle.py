@@ -21,6 +21,8 @@ class Veh(object):
         tnid: target (end of route) node id
         K: capacity
         load: number of passengers on board
+        comp: number of completed packeges
+        accept: The acceptance rate of the rider
         sche: (schedule) a list of pick-up and drop-off points
         route: a list of legs
         t: total duration of the route
@@ -38,7 +40,7 @@ class Veh(object):
 
     """
 
-    def __init__(self, id: int, nid: int, lng: float, lat: float, capacity: int, system_time_sec: float):
+    def __init__(self, id: int, nid: int, lng: float, lat: float, capacity: int, vehicle_acceptance: float, system_time_sec: float):
         self.id = id
         self.status = VehicleStatus.IDLE
         self.state_time = system_time_sec
@@ -51,6 +53,8 @@ class Veh(object):
         self.d_to_nid = 0.0
         self.tnid = self.nid
         self.load = 0
+        self.comp = 0
+        self.accept = vehicle_acceptance
         self.sche = []
         self.route = deque([])
         self.t = 0.0
@@ -81,6 +85,7 @@ class Veh(object):
         done = []
         self.new_picked_rids.clear()
         self.new_dropped_rids.clear()
+        totalorder = 0
         while dT > 0 and len(self.route) > 0:
             leg = self.route[0]
             # if the first leg could be finished by then
@@ -92,6 +97,8 @@ class Veh(object):
                     self.Ds += leg.d
                     self.Lt += leg.t * self.load
                     self.Ld += leg.d * self.load
+                    if leg.pod == 1:
+                        self.comp += 1
                     if self.status == VehicleStatus.WORKING and self.load == 0:
                         self.Ts_empty += leg.t
                         self.Ds_empty += leg.d
@@ -228,13 +235,13 @@ class Veh(object):
     # build the route of the vehicle based on a series of schedule tasks (rid, pod, tnid, ddl)
     # update t, d, status accordingly
     # rid, pod, tlng, tlat are defined as in class Leg
-    def build_route(self, sche: list[(int, int, int, float)]):
+    def build_route(self, sche: list[(int, int, int, float, int)]):
         # if a vehicle is assigned a trip while ensuring it visits the rebalancing node,
         # its rebalancing task can be cancelled
         if self.status == VehicleStatus.REBALANCING and len(sche) > 1:
             assert (len(self.sche) == 1)
             idx = -1
-            for (rid, pod, tnid, ddl) in sche:
+            for (rid, pod, tnid, ddl, prio) in sche:
                 idx += 1
                 if rid == -1:
                     sche.pop(idx)
@@ -248,6 +255,7 @@ class Veh(object):
             # add the unfinished step from last move updating
             rid = -2
             pod = 0
+            prio = -2
             tnid = self.step_to_nid.nid_pair[1]
             tlng = self.step_to_nid.geo_pair[1][0]
             tlat = self.step_to_nid.geo_pair[1][1]
@@ -255,7 +263,7 @@ class Veh(object):
             duration = self.step_to_nid.t
             distance = self.step_to_nid.d
             steps = [copy.deepcopy(self.step_to_nid), Step(0, 0, [tnid, tnid], [[tlng, tlat], [tlng, tlat]])]
-            leg = Leg(rid, pod, tnid, ddl, duration, distance, steps)
+            leg = Leg(rid, pod, tnid, ddl, prio, duration, distance, steps)
             # the last step of a leg is always of length 2,
             # consisting of 2 identical points as a flag of the end of the leg
             assert len(leg.steps[-1].geo_pair) == 2
@@ -264,9 +272,11 @@ class Veh(object):
             self.tnid = leg.steps[-1].nid_pair[1]
             self.d += leg.d
             self.t += leg.t
+            
         if self.sche:
-            for (rid, pod, tnid, ddl) in self.sche:
-                self.add_leg(rid, pod, tnid, ddl)
+            for (rid, pod, tnid, ddl, prio) in self.sche:
+
+                self.add_leg(rid, pod, tnid, ddl, prio)
                 if pod == 1:
                     self.picking_rids.append(rid)
 
@@ -286,11 +296,12 @@ class Veh(object):
         else:
             self.status = VehicleStatus.IDLE
 
-    # add a leg based on (rid, pod, tnid, ddl)
-    def add_leg(self, rid: int, pod: int, tnid: int, ddl: float):
+    # add a leg based on (rid, pod, tnid, ddl, prio)
+    def add_leg(self, rid: int, pod: int, tnid: int, ddl: float, prio: int):
         duration, distance, segments = build_route_from_origin_to_dest(self.tnid, tnid)
         steps = [Step(s[0], s[1], s[2], s[3]) for s in segments]
-        leg = Leg(rid, pod, tnid, ddl, duration, distance, steps)
+        prio = -3
+        leg = Leg(rid, pod, tnid, ddl, prio, duration, distance, steps)
         # the last step of a leg is always of length 2,
         # consisting of 2 identical points as a flag of the end of the leg
         # (this check is due to using OSRM, might not necessary now)

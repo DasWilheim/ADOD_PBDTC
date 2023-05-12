@@ -72,13 +72,14 @@ class Leg(object):
         steps: a list of steps
     """
 
-    def __init__(self, rid: int, pod: int, tnid: int, ddl: int,
+    def __init__(self, rid: int, pod: int, tnid: int, ddl: int, prio: int,
                  t: float = 0.0, d: float = 0.0,
                  steps: deque[Step] = []):
         self.rid = rid
         self.pod = pod
         self.tnid = tnid
         self.ddl = ddl
+        self.prio = prio
         self.t = t
         self.d = d
         self.steps = deque(steps)

@@ -1,30 +1,39 @@
-import csv
-import random
-import sys
 import os
+import sys
+import csv
+import math
+import random
+ 
+
+
 ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.append(ROOT_PATH)
-SIMULATION_DAYs = ["26", "25"]
-for day in SIMULATION_DAYs:
-# open het CSV-bestand voor lezen en schrijven
-    with open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/reduced-manhattan-taxi-201605{day}-peak.csv', 'r') as csv_in_file, open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/priority-manhattan-taxi-201605{day}-peak.csv', 'w', newline='') as csv_out_file:
 
-        # maak de csv reader en writer objecten
+SIMULATION_DAYs = ["26"]
+for day in SIMULATION_DAYs:
+    with open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/20160525-flat1.1.csv', 'r') as csv_in_file, open(f'{ROOT_PATH}/datalog-gitignore/taxi-data/aaaa.csv', 'w', newline='') as csv_out_file:
+
         csv_reader = csv.reader(csv_in_file)
         csv_writer = csv.writer(csv_out_file)
 
-        # schrijf de eerste rij (header) van het CSV-bestand naar het uitvoerbestand
         header = next(csv_reader)
         csv_writer.writerow(header)
 
-        # loop door elke rij in het CSV-bestand
-        for row in csv_reader:
+        period = 2000  # Adjust this value to change the wave period
 
-            # genereer een willekeurige integer tussen 0 en 3
-            random_int = random.randint(0, 3)
+        for i, row in enumerate(csv_reader):
+            # Calculate the sine wave value for the current index
+            sine_wave_value = math.sin(2 * math.pi * i / period)
 
-            # voeg de willekeurige integer toe aan de rij
-            row.append(str(random_int))
+            # Assign a priority based on the sine wave value
+            probability_priority_1 = (0.14 * sine_wave_value) + 0.3
 
-            # schrijf de gewijzigde rij naar het uitvoerbestand
+            # Assign a priority based on the probability
+            if random.random() < probability_priority_1:
+                priority = 1
+            else:
+                priority = 2
+
+            row[-1] = str(priority)  # Replace the priority value in the row
+
             csv_writer.writerow(row)

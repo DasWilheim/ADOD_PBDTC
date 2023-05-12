@@ -5,13 +5,16 @@ optimal batch assignment: computing the optimal schedule pool and then assign th
 from src.dispatcher.ilp_assign import *
 from itertools import permutations
 
-FEASIBLE_TRIP_TABLE = [[[] for i in range(VEH_CAPACITY[0] + 4)] for j in range(FLEET_SIZE[0])]
+FEASIBLE_TRIP_TABLE = [[[] for i in range(sum(VEH_CAPACITY) + 4)] for j in range(sum(FLEET_SIZE))]
 PREV_FEASIBLE_TRIP_TABLE = [[]]
 
 
 def assign_orders_through_osp(new_received_rids: list[int], reqs: list[Req], vehs: list[Veh], system_time_sec: int,
-                              value_func: ValueFunction, is_reoptimization: bool = True):
+                              value_func: ValueFunction, priority_ratio: float, is_reoptimization: bool = True):
     t = timer_start()
+
+
+
     # Some general settings.
     #        Always turned on. Only turned off to show that without re-optimization (re-assigning picking orders),
     #        multi-to-one match only outperforms a little than one-to-one match.
@@ -45,12 +48,14 @@ def assign_orders_through_osp(new_received_rids: list[int], reqs: list[Req], veh
     # 2. Compute all possible vehicle trip pairs, each indicating the orders in the trip can be served by the vehicle.
     if not enable_reoptimization:
         enable_fast_compute = False
+        
     candidate_veh_trip_pairs = \
         compute_candidate_veh_trip_pairs(new_received_rids, considered_rids, reqs, vehs, system_time_sec,
-                                         cutoff_time_for_a_size_k_trip_search_per_veh_sec,
+                                         cutoff_time_for_a_size_k_trip_search_per_veh_sec, priority_ratio,
                                          enable_reoptimization, enable_fast_compute)
 
     # 3. Score the candidate vehicle_trip_pairs.
+
     if not ENABLE_VALUE_FUNCTION:
         score_vt_pairs_with_num_of_orders_and_sche_cost(candidate_veh_trip_pairs, reqs, system_time_sec)
     else:
@@ -93,29 +98,31 @@ def assign_orders_through_osp(new_received_rids: list[int], reqs: list[Req], veh
 
 def compute_candidate_veh_trip_pairs(new_received_rids: list[int], considered_rids: list[int],
                                      reqs: list[Req], vehs: list[Veh], system_time_sec: int,
-                                     cutoff_time_for_a_size_k_trip_search_per_veh_sec: int,
-                                     enable_reoptimization: bool, enable_fast_compute: bool) \
+                                     cutoff_time_for_a_size_k_trip_search_per_veh_sec: int, priority_ratio: float,
+                                     enable_reoptimization: bool , enable_fast_compute: bool ) \
         -> list[[Veh, list[Req], list[(int, int, int, float)], float, float]]:
+
+
     t = timer_start()
     if DEBUG_PRINT:
         print("                *Computing feasible vehicle trip pairs...", end=" ")
 
     initialize_feasible_trip_table(enable_fast_compute)
-
+    
     # Each veh_req_pair = [veh, trip, sche, cost, score]
     candidate_veh_trip_pairs = []
     for veh in vehs:
         basic_candidate_vt_pair = \
             build_feasible_trip_table_for_one_veh(new_received_rids, considered_rids, reqs, veh, system_time_sec,
-                                                  cutoff_time_for_a_size_k_trip_search_per_veh_sec,
+                                                  cutoff_time_for_a_size_k_trip_search_per_veh_sec, priority_ratio,
                                                   enable_reoptimization, enable_fast_compute)
+
         # 1. Add the basic schedule of the vehicle, which denotes the "empty assign" option in ILP.
         candidate_veh_trip_pairs.append(basic_candidate_vt_pair)
         # 2. Add all searched candidate vehicle-trip pairs.
         for feasible_trips_size_k in FEASIBLE_TRIP_TABLE[veh.id]:
             for [trip, best_sche, cost, feasible_sches] in feasible_trips_size_k:
                 candidate_veh_trip_pairs.append([veh, trip, best_sche, cost, 0.0])
-
         # 3. Add the current working schedule to double satisfy ensure_ilp_assigning_orders_that_are_picking.
         if enable_reoptimization:
             trip = []
@@ -123,15 +130,15 @@ def compute_candidate_veh_trip_pairs(new_received_rids: list[int], considered_ri
                 trip.append(reqs[rid])
             trip.sort(key=lambda r: r.id)
             candidate_veh_trip_pairs.append([veh, trip, copy.copy(veh.sche), compute_sche_cost(veh, veh.sche), 0.0])
-
     if DEBUG_PRINT:
         print(f"({timer_end(t)})")
+
     return candidate_veh_trip_pairs
 
 
 def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], considered_rids: list[int],
                                           reqs: list[Req], veh: Veh, system_time_sec: int,
-                                          cutoff_time_for_a_size_k_trip_search_per_veh_sec: int,
+                                          cutoff_time_for_a_size_k_trip_search_per_veh_sec: int, priority_ratio: float,
                                           enable_reoptimization: bool, enable_fast_compute: bool) \
         -> [Veh, list[Req], list[(int, int, int, float)], float, float]:
 
@@ -144,22 +151,23 @@ def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], consider
         search_rids = new_received_rids
 
     # 1. Get the basic schedules of the vehicle.
-    basic_sches = compute_basic_sches_of_one_veh(veh, system_time_sec, enable_reoptimization)
+    basic_sches = compute_basic_sches_of_one_veh(veh, system_time_sec, priority_ratio, enable_reoptimization)
     basic_candidate_vt_pair = [veh, [], basic_sches[0], compute_sche_cost(veh, basic_sches[0]), 0.0]
 
     # 2. Compute trips of size 1.
     #      Update previous trips. (If fast_compute is enabled.)
     if enable_fast_compute:
-        upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_set, veh, 1, T)
+        upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_set, veh, 1, priority_ratio, T)
         n_prev_trips_of_size_k = len(FEASIBLE_TRIP_TABLE[veh.id][0])  # k = 1
-    #      Add new trips.
-    veh_params = [veh.nid, veh.t_to_nid, veh.load]
+
+    #   Add new trips.
+    veh_params = [veh.nid, veh.t_to_nid, veh.load, veh.accept, veh.K]
     for rid in search_rids:
         req = reqs[rid]
-        req_params = [req.id, req.onid, req.dnid, req.Clp, req.Cld]
+        req_params = [req.id, req.onid, req.dnid, req.Clp, req.Cld, req.prio]
         if get_duration_from_origin_to_dest(veh.nid, req.onid) + veh.t_to_nid + system_time_sec > req.Clp:
             continue
-        best_sche, cost, feasible_sches = compute_schedule(veh_params, basic_sches, req_params, system_time_sec)
+        best_sche, cost, feasible_sches = compute_schedule(veh_params, basic_sches, priority_ratio, req_params, system_time_sec)
         if best_sche:
             FEASIBLE_TRIP_TABLE[veh.id][0].append([[req], best_sche, cost, feasible_sches])
 
@@ -169,13 +177,14 @@ def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], consider
         search_start_time_datetime = get_time_stamp_datetime()
         n_all_trips_of_size_k_minus_1 = len(feasible_trips_of_size_k_minus_1)
         k = len(feasible_trips_of_size_k_minus_1[0][0]) + 1
+
         searched_trip_ids_of_size_k = []
         feasible_trip_ids_of_size_k_minus_1 = \
             [[r.id for r in trip_info[0]] for trip_info in feasible_trips_of_size_k_minus_1]
         #      Update previous trips. (If fast_compute is enabled.)
         if enable_fast_compute:
             n_prev_trips_of_size_k_minus_1 = n_prev_trips_of_size_k
-            upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_set, veh, k, system_time_sec)
+            upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_set, veh, k, priority_ratio, system_time_sec)
             n_prev_trips_of_size_k = len(FEASIBLE_TRIP_TABLE[veh.id][k - 1])
         else:
             n_prev_trips_of_size_k_minus_1 = 0
@@ -187,7 +196,7 @@ def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], consider
                 new_trip_k = sorted(set(trip1).union(set(trip2)), key=lambda r: r.id)
                 if k > 2:
                     new_trip_k_ids = [r.id for r in new_trip_k]
-                    # Check if the new trip size is not k.
+                    # Check if the new trip size is not k. then continue.
                     if len(new_trip_k_ids) != k:
                         continue
                     # Check if the trip has been already computed.
@@ -208,11 +217,12 @@ def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], consider
                 # The schedules of the new trip is computed as inserting an order into vehicle's schedules of serving
                 # trip1. This inserted order is included in trip2 and not included in trip1.
                 sub_sches = feasible_trips_of_size_k_minus_1[i][3]
+
                 insertion_reqs = list(set(new_trip_k) - set(trip1))
                 assert (len(insertion_reqs) == 1)
                 insert_req = insertion_reqs[0]
-                insert_req_params = [insert_req.id, insert_req.onid, insert_req.dnid, insert_req.Clp, insert_req.Cld]
-                best_sche_k, cost, feasible_sches_k = compute_schedule(veh_params, sub_sches, insert_req_params,
+                insert_req_params = [insert_req.id, insert_req.onid, insert_req.dnid, insert_req.Clp, insert_req.Cld, insert_req.prio]
+                best_sche_k, cost, feasible_sches_k = compute_schedule(veh_params, sub_sches, priority_ratio, insert_req_params, 
                                                                        system_time_sec)
                 if best_sche_k:
                     FEASIBLE_TRIP_TABLE[veh.id][k - 1].append([new_trip_k, best_sche_k, cost, feasible_sches_k])
@@ -230,7 +240,7 @@ def build_feasible_trip_table_for_one_veh(new_received_rids: list[int], consider
 
 # find out which trips from the last interval can be considered feasible size k trips in the current interval
 def upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_set: set[int],
-                                                                      veh: Veh, k: int, system_time_sec: int):
+                                                                      veh: Veh, k: int, priority_ratio: float, system_time_sec: int):
     new_pick_rids_set = set(veh.new_picked_rids)
     new_drop_rids_set = set(veh.new_dropped_rids)
     new_both_rids_set = new_pick_rids_set.union(new_drop_rids_set)
@@ -271,7 +281,7 @@ def upd_prev_feasible_trip_table_to_generate_size_k_trips_for_one_veh(prev_rids_
                 else:
                     assert sum([sche[i][1] for i in range(n_new_both)]) == n_new_pick - 1 * n_new_drop
                     del sche[0:n_new_both]
-            flag, c, viol = test_constraints_get_cost(veh_params, sche, 0, 0, 0, system_time_sec)
+            flag, c, viol = test_constraints_get_cost(veh_params, sche, priority_ratio, 0, 0, 0, system_time_sec)
             if flag:
                 feasible_sches_k.append(sche)
                 if c < min_cost_k:
@@ -289,11 +299,13 @@ def initialize_feasible_trip_table(enable_fast_compute: bool):
     global FEASIBLE_TRIP_TABLE, PREV_FEASIBLE_TRIP_TABLE
     if enable_fast_compute:
         PREV_FEASIBLE_TRIP_TABLE = FEASIBLE_TRIP_TABLE
-    FEASIBLE_TRIP_TABLE = [[[] for i in range(VEH_CAPACITY[0] + 4)] for j in range(FLEET_SIZE[0])]
+    FEASIBLE_TRIP_TABLE = [[[] for i in range(sum(VEH_CAPACITY) + 4)] for j in range(sum(FLEET_SIZE))]
 
+    # The acceptance is the change that the vehicle will accept the ride. it is a float. It return a boolian.
+    
 
-def compute_basic_sches_of_one_veh(veh: Veh, system_time_sec: int,
-                                   enable_reoptimization: bool) -> list[list[(int, int, int, float)]]:
+def compute_basic_sches_of_one_veh(veh: Veh, system_time_sec: int, priority_ratio: float,
+                                   enable_reoptimization: bool) -> list[list[(int, int, int, float, int)]]:
     basic_sches = []
 
     # If the vehicle is rebalancing, just return its current full schedule to ensure its rebalancing task.
@@ -303,19 +315,24 @@ def compute_basic_sches_of_one_veh(veh: Veh, system_time_sec: int,
         return basic_sches
 
     # If the vehicle is working, return the sub-schedule only including the drop-off tasks.
-    veh_params = [veh.nid, veh.t_to_nid, veh.load]
+    veh_params = [veh.nid, veh.t_to_nid, veh.load, veh.accept, veh.K]
     basic_sche = []
     for leg in veh.route:
         if leg.rid in veh.onboard_rids:
-            basic_sche.append((leg.rid, leg.pod, leg.tnid, leg.ddl))
+            for sche in veh.sche:
+                # If the vehicle allredy has a priority in its schedule, use it.
+                if sche[0] == leg.rid:
+                    leg.prio = sche[4]
+            basic_sche.append((leg.rid, leg.pod, leg.tnid, leg.ddl, leg.prio))
     assert (len(basic_sche) == veh.load)
+
     basic_sches.append(basic_sche)
 
     # Consider permutations of basic_schedule to make sure we search all possible schedules later.
     for sche in permutations(basic_sche):
         sche = list(sche)
         if sche != basic_sche:
-            flag, c, viol = test_constraints_get_cost(veh_params, sche, 0, 0, 0, system_time_sec)
+            flag, c, viol = test_constraints_get_cost(veh_params, sche, priority_ratio, 0, 0, 0, system_time_sec)
             if flag:
                 basic_sches.append(sche)
     assert (len(basic_sches) > 0)

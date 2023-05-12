@@ -127,7 +127,7 @@ def store_vehs_current_state_and_post_decision_state_as_an_experience(num_of_new
     #    1.2. Exogenous information about now.
     vehs_normalized_num_of_nearby_vehs_at_current_state = \
         compute_normalized_num_of_nearby_vehs_for_all_vehs_with_given_node_ids([veh.nid for veh in vehs])
-    normalized_num_of_new_reqs_at_current_state = num_of_new_reqs / FLEET_SIZE[0]
+    normalized_num_of_new_reqs_at_current_state = num_of_new_reqs / sum(FLEET_SIZE)
 
     # 2. Add each vehicle's post-decision state and its reward for transition from the current to the next state.
     selected_veh_trip_pairs = [None] * len(vehs)
@@ -201,7 +201,7 @@ def compute_normalized_num_of_nearby_vehs_for_all_vehs_with_given_node_ids(vehs_
                 vehs_normalized_num_of_nearby_vehs[i] += 1
                 vehs_normalized_num_of_nearby_vehs[j] += 1
         vehs_normalized_num_of_nearby_vehs[i] = \
-            vehs_normalized_num_of_nearby_vehs[i] / FLEET_SIZE[0]
+            vehs_normalized_num_of_nearby_vehs[i] / sum(FLEET_SIZE)
     return vehs_normalized_num_of_nearby_vehs
 
 

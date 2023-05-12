@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
-
 # start time of initialization
 from src.utility.utility_functions import *
+
+
+
 s_time = get_time_stamp_datetime()
 print(f"[INFO] Initializing the simulator (fleet_size = {FLEET_SIZE[0]}, capacity = {VEH_CAPACITY[0]}, "
       f"req_density {REQUEST_DENSITY})...")
@@ -24,12 +26,12 @@ def run_sim(net_file_path=None):
         print(f"      (COLLECT_DATA = {COLLECT_DATA}, ENABLE_VALUE_FUNCTION = {ENABLE_VALUE_FUNCTION}, "
               f"ONLINE_TRAINING = {ONLINE_TRAINING})")
         print(f"      (Value_Func = {EVAL_NET_FILE_NAME})")
-        platform = Platform(TAXI_DATA_FILEs[idx], value_func, s_time)
-        platform.create_report(show=(len(SIMULATION_DAYs) <= 1))
+        platform = Platform(TAXI_DATA_FILEs[idx], value_func, s_time, window_size=100)
+        platform.create_report(idx = idx, show=(len(SIMULATION_DAYs) <= len(SIMULATION_DAYs)), store=STORE_RESULTS)
         # 2.2. Run simulation. ("frames_system_states" is only recorded If RENDER_VIDEO is enabled, or it is None.)
         frames_system_states = platform.run_simulation()
         # 2.3. Output the simulation results.
-        platform.create_report(show=(len(SIMULATION_DAYs) <= 1))
+        platform.create_report(idx = idx, show=(len(SIMULATION_DAYs) <= len(SIMULATION_DAYs)), store=STORE_RESULTS)
         main_sim_results.append(platform.main_sim_result)
         print(f"[INFO] Result on {day}: total_service = {platform.main_sim_result[0]}/{platform.main_sim_result[1]} "
               f"({platform.main_sim_result[2]}%)")
@@ -58,7 +60,6 @@ def run_sim(net_file_path=None):
 
 if __name__ == '__main__':
     run_sim()
-
     # VC = [2, 4, 6, 8]
     # for vc in VC:
     #     config_change_vc(vc)

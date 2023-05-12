@@ -49,12 +49,42 @@ def anim(frames_vehs):
                 routes1[i].set_data(r1x, r1y)
         return vehs, routes1
 
+    # fig = plt.figure(figsize=(MAP_WIDTH, MAP_HEIGHT))
+    # plt.xlim((Olng, Dlng))
+    # plt.ylim((Olat, Dlat))
+    # img = mpimg.imread(f'{root_path}/map.jpg')
+    # plt.imshow(img, extent=[Olng, Dlng, Olat, Dlat], aspect=(Dlng - Olng) / (Dlat - Olat) * MAP_HEIGHT / MAP_WIDTH)
+    # fig.subplots_adjust(left=0.00, bottom=0.00, right=1.00, top=1.00)
     fig = plt.figure(figsize=(MAP_WIDTH, MAP_HEIGHT))
-    plt.xlim((Olng, Dlng))
-    plt.ylim((Olat, Dlat))
+    zoom_factor = 1/ZOOM_FACTOR	 # define the zoom factor (0.5 means zoom in by 50%)
+    dx = Dlng - Olng
+    dy = Dlat - Olat
+    xmid = 0.5 * (Dlng + Olng)
+    ymid = 0.5 * (Dlat + Olat)
+    xmin = xmid - zoom_factor * 0.5 * dx
+    xmax = xmid + zoom_factor * 0.5 * dx
+    ymin = ymid - zoom_factor * 0.5 * dy
+    ymax = ymid + zoom_factor * 0.5 * dy
+    zoom_extent = [xmin, xmax, ymin, ymax]
+    plt.xlim((xmin, xmax))
+    plt.ylim((ymin, ymax))
+    dx = 1100
+    dy = 2160
+    xmid = 0.5 * 1100 + 4
+    ymid = 0.5 * 2160 + 2
+    xmin = int(xmid - zoom_factor * 0.5 * dx)
+    xmax = int(xmid + zoom_factor * 0.5 * dx)
+    ymin = int(ymid - zoom_factor * 0.5 * dy)
+    ymax = int(ymid + zoom_factor * 0.5 * dy)
+
     img = mpimg.imread(f'{root_path}/map.jpg')
-    plt.imshow(img, extent=[Olng, Dlng, Olat, Dlat], aspect=(Dlng - Olng) / (Dlat - Olat) * MAP_HEIGHT / MAP_WIDTH)
+    # zoom_extent = [xmin, xmax, ymin, ymax]
+    img = img[ymin:ymax, xmin:xmax, : ]
+
+# Select the sub-region of the image to be displayed
+    plt.imshow(img, extent=zoom_extent, aspect=(dx * zoom_factor) / (dy * zoom_factor) * MAP_HEIGHT / MAP_WIDTH)
     fig.subplots_adjust(left=0.00, bottom=0.00, right=1.00, top=1.00)
+# 
     vehs = []
     routes1 = []  # veh current route
 

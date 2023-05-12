@@ -44,7 +44,7 @@ class ValueFunction(object):
          vt_pairs_reward_for_transition_from_current_to_next_state,
          assumed_vt_pairs_normalized_num_of_nearby_veh_at_next_state] = \
             compute_post_decision_state_for_vt_pairs(veh_trip_pairs, vehs, system_time_sec, is_reoptimization)
-        assumed_normalized_num_of_new_reqs_at_next_state = num_of_new_reqs / FLEET_SIZE[0]
+        assumed_normalized_num_of_new_reqs_at_next_state = num_of_new_reqs / sum(FLEET_SIZE)
 
         # 2. Get the expected value of being in the post-decision state.
         post_state_values = use_a_net_to_get_scores_for_a_list_of_veh_states(

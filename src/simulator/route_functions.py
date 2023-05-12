@@ -1,7 +1,7 @@
 """
 route planning functions
 """
-
+import random
 from src.utility.utility_functions import *
 
 t = timer_start()
@@ -24,6 +24,23 @@ def get_duration_from_origin_to_dest(onid: int, dnid: int) -> float:
     assert duration != -1
     return duration
 
+
+# get the mean duration of the best route from origin to destination
+def get_duration_from_origin_to_dest_factored(onid: int, dnid: int) -> float:
+    duration = mean_travel_time_table[onid - 1][dnid - 1] * 1.2
+    assert duration != -1
+    return duration
+
+# creates the vehicle acceptqnce function
+def get_vehicle_acceptance():
+    #create a number between 0.7 and 1.0
+    acceptance = random.uniform(0.7, 1.0)
+    return acceptance
+
+def compute_the_ride_acceptance(veh_params) -> bool:
+    [nid, t_to_nid, load, accept, veh_capacity] = veh_params
+    acceptance = accept
+    return np.random.random() < acceptance
 
 # get the distance of the best route from origin to destination
 def get_distance_from_origin_to_dest(onid: int, dnid: int) -> float:
