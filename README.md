@@ -1,5 +1,6 @@
 # `AMoD Simulation`
-<img src="https://github.com/Leot6/AMoD/blob/master/demo.gif" width="1024">
+
+![demo](https://github.com/DasWilheim/ADOD_PBDTC/assets/117392093/54bf906d-e8e4-4b6c-b7e6-69bb417cfdbf)
 
 (The illustration above shows an example instance using London map and [OSRM](https://github.com/Project-OSRM/osrm-backend). Now we have moved to Manhattan map and offline routing.)
 
